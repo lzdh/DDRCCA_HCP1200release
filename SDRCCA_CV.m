@@ -4,13 +4,14 @@ clc
 SMvars = importdata('../Data/Flipped1003x233.mat');
 headers = importdata('../Data/header233_flipped.txt'); 
 NET = importdata('../rawdata/netmats2.txt');
-N_SM = importdata('../Data/N_pca_SM.mat');
-N_BM = importdata('../Data/N_pca_BM.mat');
+% N_SM = importdata('../Data/N_pca_SM.mat');
+% N_BM = importdata('../Data/N_pca_BM.mat');
 load('../Data/NETd_node.mat');
 Fam_info=readtable('../Data/Fam_infoBMsubs.csv');
-
 %SM_sdr = importdata('../Data/SDR_SM62.mat');
 %BM_sdr = importdata('../Data/SDR_BM6867.mat');
+EB=hcp2blocks('../rawdata/restricted.txt', [ ], false, SMvars(:,1));
+
 
 %%% Generate SDR variables and do factor rotation
 confounds = [2:15]; %0
@@ -51,7 +52,7 @@ sub_area={Demographics,PhyHeal,FemHeal, FamHist, Psychiatry, Sensory, Drug,Alcoh
 % 
 % NET1=nets_normalise(NET); % no norm
 % NETd=nets_normalise(NET1-conf*(pinv(conf)*NET1));   % deconfound and demean
-
+Nperm=10000;
 [C0,IA]=unique(Fam_info.Family_ID);
 K=5;
 %for k=1:20
@@ -67,7 +68,7 @@ for i=1:size(Fam_info,1)
 end          
 
 for n=1:K
-
+    fprintf('\n Fold %d', n);
     Test=Fam_info(Fam_info.group_ID==n,1);
     Test=table2array(Test);
     Train=setdiff(Fam_info.Subject,Test);
@@ -77,13 +78,13 @@ for n=1:K
     for i=1:size(Test,1)
         index_test(i)=find(Test(i)==SMvars(:,1));
     end
-    vars_test=SMvars(index_test',:);
+    vars_test=SMvars(index_test,:);
     net_test = NET(index_test,:);
 
     for i=1:size(Train,1)
         index_train(i)=find(Train(i)==SMvars(:,1));
     end
-    vars_train=SMvars(index_train',:);
+    vars_train=SMvars(index_train,:);
     net_train = NET(index_train,:);
 
     %%% construct confounds for training and test sets
@@ -116,7 +117,7 @@ for n=1:K
 
     %%% for training set, apply two-way CV to estimate dims for all for
     %%% both SM and BM sub-domains (this requires another 5-fold CV)
-    Fam_info_sub = Fam_info(index1',:);
+    Fam_info_sub = Fam_info(index_train,:);
     [C1,~]=unique(Fam_info_sub.Family_ID);
 
     SDRgroups = crossvalind('Kfold',length(C1),K); %K-fold
@@ -129,7 +130,7 @@ for n=1:K
     Error_sm=[];
     Error_bm=[];
     for m=1:K
-
+        
         held_out=Fam_info_sub(Fam_info_sub.group_ID==m,1);
         held_out=table2array(held_out);
         held_in=setdiff(Fam_info_sub.Subject,held_out);
@@ -137,14 +138,14 @@ for n=1:K
         index1=0;
         index2=0;
         for i=1:size(held_out,1)
-            index2(i)=find(held_out(i)==vars_train(:,1));
+            index2(i)=find(held_out(i)==vars_train(:,1))';
         end
 
         for i=1:size(held_in,1)
-            index1(i)=find(held_in(i)==vars_train(:,1));
+            index1(i)=find(held_in(i)==vars_train(:,1))';
         end
-        vars_in=vars_train(index1',:);
-        vars_out=vars_train(index2',:);
+        vars_in=vars_train(index1,:);
+        vars_out=vars_train(index2,:);
 
         %%% construct confounds for held-in and held-out sets
         conf_in=palm_inormal([vars_in(:,confounds(1:12)), vars_in(:,confounds(13:14)).^(1/3)]); 
@@ -191,13 +192,15 @@ for n=1:K
             end
             Error_sm{d}(index2,:) = error2;
         end
-
+        
+        
         %%% SDR on BM
         for d=1:200
+            net_in = NETd_node{d}(index_train,:);
             fprintf('\n Estimating dimension for node %d', d);
 
-            net_in_d = NETd_node{d}(index1,:);
-            net_out_d = NETd_node{d}(index2,:);
+            net_in_d = net_in(index1,:);
+            net_out_d = net_in(index2,:);
 
             %de-mean normailise by node std (weight node variance) and de-confound held-in and held-out sets
             net_in_d = nets_demean(net_in_d); net_in_d = net_in_d/std(net_in_d(:));
@@ -211,7 +214,7 @@ for n=1:K
 
             err=[];
             error=[];
-            for j=1:5              
+            for j=1:40              
                 for i=1:size(net_out_d,2)
                     proj = net_out_d(:,[1:i-1 i+1:end])*pinv(vv2([1:i-1 i+1:end],1:j))'*vv2(:,1:j)'; 
                     err(:,i) = net_out_d(:,i) - proj(:,i); %Pseudoinverse
@@ -222,7 +225,7 @@ for n=1:K
         end    
     end
 
-
+    %%%construct latent factors for SM and BM to feed into CCA
     rPC_SM_train = [];
     rPC_SM_test = [];
     for d = 1:length(sub_area)
@@ -232,16 +235,19 @@ for n=1:K
         varsd_train(isnan(varsd_train))=0;
         varsd_test(isnan(varsd_test))=0;
 
-        COV = cov(varsd_train, 'partialrows');
+        COV = cov(varsd_train(:,sub_area{d}), 'partialrows');
         [v,~] = eigs(COV, N_sm(n,d));
-
+        
         if N_sm(n,d) ~= 1
-            [v_r,T] = rotatefactors(v);
-            rPC_SM_train = [rPC_SM_train, varsd_train*v_r];
-            rPC_SM_test = [rPC_SM_test, varsd_test*v_r];
+%             [v_r,T] = rotatefactors(v);
+%             rPC_SM_train = [rPC_SM_train, varsd_train*v_r];
+%             rPC_SM_test = [rPC_SM_test, varsd_test*v_r];
+           
+            rPC_SM_train = [rPC_SM_train, varsd_train(:,sub_area{d})*v];
+            rPC_SM_test = [rPC_SM_test, varsd_test(:,sub_area{d})*v];
         else
-            rPC_SM_train = [rPC_SM_train, netd_train*v];
-            rPC_SM_test = [rPC_SM_test, varsd_test*v];
+            rPC_SM_train = [rPC_SM_train, varsd_train(:,sub_area{d})*v];
+            rPC_SM_test = [rPC_SM_test, varsd_test(:,sub_area{d})*v];
         end            
     end
 
@@ -264,25 +270,77 @@ for n=1:K
     
         COV = cov(netd_sub_train);
         [v,~] = eigs(COV, N_bm(n,d));
-        if N_SM ~= 1
-            v_r = rotatefactors(v);
-            rPC_BM_train = [rPC_BM_train, netd_sub_train*v_r];
-            rPC_BM_test = [rPC_BM_test, netd_sub_test*v_r];
+        if N_bm(n,d) ~= 1
+%             v_r = rotatefactors(v);
+%             rPC_BM_train = [rPC_BM_train, netd_sub_train*v_r];
+%             rPC_BM_test = [rPC_BM_test, netd_sub_test*v_r];
+            rPC_BM_train = [rPC_BM_train, netd_sub_train*v];
+            rPC_BM_test = [rPC_BM_test, netd_sub_test*v];
         else
             rPC_BM_train = [rPC_BM_train, netd_sub_train*v];
             rPC_BM_test = [rPC_BM_test, netd_sub_test*v];
         end
     end
 
+    [~, score] = pca(rPC_BM_train);
+    rPC_BM_train100 = score(:,1:100);
+    
+    [~, score_test] = pca(rPC_BM_test);
+    rPC_BM_test100 = score_test(:,1:100);
     %%% CCA
-    [A_train, B_train, R_train, P_train, Q_train] = canoncorr(rPC_SM_train, rPC_BM_train);
-    
+    [A_train{n}, B_train{n}, R_train{n}, P_train{n}, Q_train{n}] = canoncorr(rPC_SM_train, rPC_BM_train100);
     %%% reconstruct test canonical variates
-    P_test = rPC_SM_test*A_train;
-    Q_test = rPC_BM_test*B_train;
-    R_test = corr(P_test, Q_test,
+    P_test{n} = rPC_SM_test*A_train{n};
+    Q_test{n} = rPC_BM_test100*B_train{n};
+    R_test{n} = corr(P_test{n}, Q_test{n});
+    R_test{n} = diag(R_test{n});
     
-
-
+    %%% permutation testing
+    EB_in=EB(index_train,:);
+    EB_out=EB(index_test,:);
+    PAPset_in=palm_quickperms([ ], EB_in, Nperm);      % the final matrix of permuations
+    PAPset_out=palm_quickperms([ ], EB_out, Nperm);     % the final matrix of permuations
+    
+    grotRp=[]; clear grotRpval grotRpval_out;
+    grotRp_out=[];
+    grotRp_cv=[];
+    
+    for j=1:Nperm
+      [grotAr,grotBr,grotRp(j,:),grotUr,grotVr,grotstatsr]=canoncorr(rPC_SM_train,rPC_BM_train100(PAPset_in(:,j),:));
+      %Permutation for CV
+       grotVr_CV=rPC_BM_test100(PAPset_out(:,j),:)*grotBr; %'psuedo-canonical variates' for SM
+       grotUr_CV=rPC_SM_test*grotAr;
+       for q=1:size(grotUr_CV,2)
+            grotRp_cv(j,q)=corr(grotVr_CV(:,q), grotUr_CV(:,q));  %(1)
+       end  
+    end
+    
+    for i=1:size(grotRp,2);  % get FWE-corrected pvalues
+      grotRpval(i)=(1+sum(grotRp(2:end,1)>=R_train{n}(i)))/Nperm;
+      grotRpval_cv(i)=(1+sum(max(grotRp_cv(2:end,:)')>=R_test{n}(i)))/Nperm;  
+    end
+    Ncca_in(n)=sum(grotRpval<0.05)  % number of FWE-significant CCA components
+    Ncca_cv(n)=sum(grotRpval_cv<0.05)  % number of FWE-significant CCA components
+  
+    %%% canonical loadings/structral coeff.
+    CL_SM_train{n}=corr(P_train{n}(:,1:3),varsd_train,'rows','pairwise'); %in & in
+    CL_BM_train{n}=corr(Q_train{n}(:,1:3),netd_train); %NETd(index1,1:size(NET,2))
+    
+    %%% Variance explained 
+    TVE_SM_train=CL_SM_train{n}.^2; %in & in
+    TVE_BM_train=CL_BM_train{n}.^2; %NETd(index1,1:size(NET,2))
+   
+    TVE_SM_test=[];
+    TVE_BM_test=[]; 
+    for j=1:3
+        TVE_SM_test(j,:)=partialcorr(P_test{n}(:,j),varsd_test,P_test{n}(:,[1:j-1, j+1:3]),'rows','pairwise').^2; %in & in
+        TVE_BM_test(j,:)=partialcorr(Q_test{n}(:,j),net_test,Q_test{n}(:,[1:j-1, j+1:3])).^2; %NETd(index1,1:size(NET,2))   
+    end
+    
+    AVE_SM_train(n,:)=mean(TVE_SM_train,2,'omitnan');
+    AVE_BM_train(n,:)=mean(TVE_SM_train,2,'omitnan');
+     
+    AVE_SM_test(n,:)=mean(TVE_SM_test,2,'omitnan');
+    AVE_BM_test(n,:)=mean(TVE_SM_test,2,'omitnan');
 
 end
