@@ -45,9 +45,9 @@ for d=1:length(sub_area)
     end
     
     %%% Estimating dimension (minimising  PRESS) for the sub-domain using
-    %%% 5-fold CV for 10 repetitions
+    %%% 5-fold CV for 20 repetitions
     
-    for k=1:20
+    for k=1:50
         fprintf('\n CV repetition %d', k);
         
         error2=0;
@@ -141,19 +141,31 @@ N_pca
 NETmat = importdata('../rawdata/netmats2.txt');
 
 %%% deconfound netmat
-NET1=nets_demean(NETmat);  NET1=NET1/std(NET1(:)); % no norm
+NET1=nets_demean(NETmat);  NET1=NET1/std(NET1(:)); % I choose this over NET1=NET1/std(NET1(:))
 NETd=nets_demean(NET1-conf*(pinv(conf)*NET1));
 
-NETd_nodes = reshape(NETd, [1003,200,200]);
-
-for i=1:200
-    Node=[];
-    for n=1:size(NETmat,1)
-        temp=NETd_nodes(n,i,:);
-        Node=[Node; temp];
-    end
-    NETd_node{i}=reshape(Node,[size(NETmat,1) 200]);
+NET_nodes= [];
+for i =1:200
+    NET_nodes{i} = NETmatd(:,200*(i-1)+1:200*i);
+%     NET_nodes{i}=nets_demean(NET_nodes{i});  NET_nodes{i}=NET_nodes{i}./std(NET_nodes{i}); % no norm
+%     NET_nodes{i}=nets_demean(NET_nodes{i}-conf*(pinv(conf)*NET_nodes{i}));
 end
+
+NETd_nodes= [];
+for i =1:200
+    NETd_nodes{i} = NETd(:,200*(i-1)+1:200*i);
+end
+
+%%% The following is equivalent to above but much slower
+% NETd_nodes = reshape(NETd, [1003,200,200]);
+% for i=1:200
+%     Node=[];
+%     for n=1:size(NETmat,1)
+%         temp=NETd_nodes(n,i,:);
+%         Node=[Node; temp];
+%     end
+%     NETd_node{i}=reshape(Node,[size(NETmat,1) 200]);
+% end
 
 %% Two-way CV on brain measures
 Fam_info=readtable('../Data/Fam_infoBMsubs.csv');
@@ -165,12 +177,12 @@ load('../Data/NETd_node.mat');
 
 %%% setup confounds matrix
 confounds = [2:15]; %0
-conf=palm_inormal([SM(:,confounds(1:12)), SM(:,confounds(13:14)).^(1/3)]); % Gaussianise.  479 480 481 race variables
+conf=palm_inormal([SM(:,confounds(1:12)), SM(:,confounds(13:14)).^(1/3)]); % Gaussianise.  
 conf(isnan(conf))=0;  % impute missing data as zeros
 conf=nets_normalise([conf, conf(:,5).^2, conf(:,10:12).^2]);  % add on squared terms and renormalise
 
 
-for d=1:200
+for d=1:2
     fprintf('\n Estimating dimension for node %d', d);
     
     Node=NETd_node{d};
@@ -224,6 +236,8 @@ for d=1:200
             end
         end
         Error2_sim(k,:,:) = error2;
+        temp = sum(error2);
+        N_sim(d,k) = find(temp==(min(temp)));
     end
     Error2_ave = reshape(mean(Error2_sim,1), [size(error2,1),size(error2,2)]);    
     Error2{d} = sum(Error2_ave); 
@@ -240,11 +254,14 @@ clear
 clc
 
 N=[];
+N_sims=[];
 for k=1:200
-  myfilename = sprintf('/Users/zliu/Desktop/HCP1200/Result/buster_results/batch2/SDRNET_node%d.mat', k);
+  myfilename = sprintf('/Users/zliu/Desktop/HCP1200/Result/buster_results/SDRNET_node%d.mat', k);
   load(myfilename);
-  Error{k} = Error2;
-  N=[N N_pca];
+  N_sims(k,:) = N_sim;
+  %N_sims{k} = N_sim;
+  N=[N; N_pca];
+  %randomness{k} = test_random{1};
 end
  
 load('../Data/NETd_node.mat')

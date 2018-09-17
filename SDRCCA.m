@@ -48,7 +48,7 @@ for d=1:length(sub_area)
       grot=(isnan(varsd(:,i))==0); grotconf=nets_demean(conf(grot,:)); varsd(grot,i)=normalise(varsd(grot,i)-grotconf*(pinv(grotconf)*varsd(grot,i)));
     end
     
-    [v_p,score,~]=ppca(varsd, N_SM(d));
+    [v_p,score,~]=ppca(varsd, N_SM(d));% probalistic PCA
     
     %%%impute missing data by k nearest rows
     if d == 3 %feminine health
@@ -109,23 +109,26 @@ NETd=nets_demean(NET1-conf*(pinv(conf)*NET1));   % deconfound and demean
 SM_sdr = rPC_SM-conf*(pinv(conf)*rPC_SM);
 BM_sdr = rPC_BM-conf*(pinv(conf)*rPC_BM);
 
+%%% further reduce the dimension by PCA
+% [~,SM_score] = pca(SM_sdr);
+% SM_pc = SM_score(:,1:30);
 [~,BM_score] = pca(BM_sdr);
-BM_pc = BM_score(:,1:100);
+BM_pc = BM_score(:,1:200);
 
 %%% CCA
 [A,B,R,P,Q] = canoncorr(SM_sdr, BM_pc);
 
 %%% CCA permutation testing
-
-EB=hcp2blocks('../rawdata/restricted.txt', [ ], false, SMvars(:,1)); % change the filename to your version of the restricted file
-PAPset=palm_quickperms([ ], EB, Nperm);                                            % the final matrix of permuations
-
-grotRp=zeros(Nperm,Nkeep); clear grotRpval;
+% 
+% EB=hcp2blocks('../rawdata/restricted.txt', [ ], false, SMvars(:,1)); % change the filename to your version of the restricted file
+% PAPset=palm_quickperms([ ], EB, Nperm);                                            % the final matrix of permuations
+load('../Data/PAPset.mat');
+grotRp=[]; clear grotRpval;
 for j=1:Nperm
   j
   [grotAr,grotBr,grotRp(j,:),grotUr,grotVr,grotstatsr]=canoncorr(SM_sdr(PAPset(:,j),:), BM_pc);
 end
-for i=1:Nkeep;  % get FWE-corrected pvalues
+for i=1:30;  % get FWE-corrected pvalues
   grotRpval(i)=(1+sum(grotRp(2:end,1)>=R(i)))/Nperm;
 end
 grotRpval
@@ -138,8 +141,13 @@ for i=1:3
 end
 
 %%% factor rotation
-[CL_sm_r, T_sm] = rotatefactors(CL_sm);
-[CL_bm_r, T_bm] = rotatefactors(CL_bm);
+% [CL_sm_r, T_sm] = rotatefactors(CL_sm);
+% [CL_bm_r, T_bm] = rotatefactors(CL_bm);
+
+%%% variance explained
+VE_sm=mean(CL_sm.^2,'omitnan')*100; %in & in
+VE_bm=mean(CL_bm.^2, 'omitnan')*100; %NETd(index1,1:size(NET,2))
+
 
 
 
